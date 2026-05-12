@@ -1,3 +1,6 @@
 .env
 .continue
 venv
+chroma_db
+chrome.md
+__pycache__

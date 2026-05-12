@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
      # ── Vector Store (ChromaDB local) ─────────────────────
     chroma_persist_dir: str = "./chroma_db"
-    collection_name: str = "openai_collection"
+    collection_name: str = "gemini_collection"
 
     # ── RAG ──────────────────────────────────────────────
     top_k: int = 4

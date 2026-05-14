@@ -18,7 +18,7 @@ class Embedder:
         )
         return response.embeddings[0].values
 
-    def embed_document(self, texts: list[str]) -> list[list[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         embeddings = []
         for text in texts:
             response = client.models.embed_content(

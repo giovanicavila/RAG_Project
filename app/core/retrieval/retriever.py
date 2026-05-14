@@ -50,16 +50,18 @@ class Retriever:
         results = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=k,
-            include=["documents", "metadatas", "distances"]
+            include=["documents", "metadatas", "distances"],
         )
 
         sources = []
-        for doc, meta, dist in zip(
+        for doc_id, doc, meta, dist in zip(
+            results["ids"][0],
             results["documents"][0],
             results["metadatas"][0],
-            results["distances"][0],
+            results["distances"][0]
         ):
             sources.append(SourceDocument(
+                id=doc_id,
                 content=doc,
                 source=meta.get("source", "unknown"),
                 score=round(1 - dist, 4),

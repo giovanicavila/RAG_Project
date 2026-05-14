@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     model_name: str = "gemini-2.0-flash"
 
     # ── Embeddings ───────────────────────────────────────
-    embedding_model: str = "models/text-embedding-004"
+    embedding_model: str = "gemini-embedding-001"
     embedding_dimension: int = 768
 
      # ── Vector Store (ChromaDB local) ─────────────────────

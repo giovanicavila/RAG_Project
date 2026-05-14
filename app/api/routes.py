@@ -27,10 +27,7 @@ async def query(request: QueryRequest) -> QueryResponse:
 async def ingest_text(request: IngestRequest) -> IngestResponse:
     """Indexes a raw text string into ChromaDB via the API."""
     try:
-        # Split text into overlapping chunks
         chunk_size, overlap = 500, 50
-        # overlap ensures sentences at chunk boundaries appear in both
-        # adjacent chunks, so nothing gets lost at the edges.
         chunks, start = [], 0
         while start < len(request.text):
             chunks.append(request.text[start:start + chunk_size])

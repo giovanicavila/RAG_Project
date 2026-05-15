@@ -13,9 +13,6 @@ class Retriever:
         self.collection = self.client.get_or_create_collection(
             name=settings.collection_name,
             metadata={"hnsw:space": "cosine"}
-            # "cosine" = cosine similarity — standard for text embeddings.
-            # hnsw = Hierarchical Navigable Small World, a fast approximate
-            # nearest-neighbor search algorithm.
         )
 
     def add_documents(

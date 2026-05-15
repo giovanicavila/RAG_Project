@@ -1,10 +1,7 @@
-from google import genai
 from google.genai import types
 from app.core.prompts.templates import RAG_SYSTEM_PROMPT, build_context
 from app.models.schemas import SourceDocument
-from config import settings
-
-client = genai.Client(api_key=settings.gemini_api_key)
+from config import settings, client
 
 class Generator:
     def __init__(self):

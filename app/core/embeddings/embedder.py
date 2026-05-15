@@ -1,8 +1,5 @@
-from google import genai
 from google.genai import types
-from config import settings
-
-client = genai.Client(api_key=settings.gemini_api_key)
+from config import settings, client
 
 class Embedder:
     def __init__(self):

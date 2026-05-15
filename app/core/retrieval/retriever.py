@@ -1,7 +1,9 @@
 import chromadb
+
 from app.core.embeddings.embedder import embedder
 from app.models.schemas import SourceDocument
 from config import settings
+
 
 class Retriever:
     def __init__(self):
@@ -11,25 +13,7 @@ class Retriever:
             # Use chromadb.Client() for in-memory storage (tests only).
         )
         self.collection = self.client.get_or_create_collection(
-            name=settings.collection_name,
-            metadata={"hnsw:space": "cosine"}
-        )
-
-    def add_documents(
-        self,
-        texts: list[str],
-        metadatas: list[dict],
-        ids: list[str]
-    ) -> None:
-        """Indexes chunks into ChromaDB. Called by the ingestion script."""
-        embeddings = embedder.embed_documents(texts)
-        # Generates all embeddings with task_type=RETRIEVAL_DOCUMENT.
-
-        self.collection.upsert(
-            documents=texts,        # raw text stored for retrieval
-            embeddings=embeddings,  # vectors used for similarity search
-            metadatas=metadatas,    # source file, page number, etc.
-            ids=ids                 # unique ID per chunk
+            name=settings.collection_name, metadata={"hnsw:space": "cosine"}
         )
 
     def search(self, query: str, top_k: int | None = None) -> list[SourceDocument]:
@@ -55,17 +39,20 @@ class Retriever:
             results["ids"][0],
             results["documents"][0],
             results["metadatas"][0],
-            results["distances"][0]
+            results["distances"][0],
         ):
-            sources.append(SourceDocument(
-                id=doc_id,
-                content=doc,
-                source=meta.get("source", "unknown"),
-                score=round(1 - dist, 4),
-                # ChromaDB returns cosine distance (0 = identical, 1 = opposite).
-                # We convert to similarity score: score = 1 - distance
-                # → 1.0 = identical, ~0.0 = irrelevant
-            ))
+            sources.append(
+                SourceDocument(
+                    id=doc_id,
+                    content=doc,
+                    source=meta.get("source", "unknown"),
+                    score=round(1 - dist, 4),
+                    # ChromaDB returns cosine distance (0 = identical, 1 = opposite).
+                    # We convert to similarity score: score = 1 - distance
+                    # → 1.0 = identical, ~0.0 = irrelevant
+                )
+            )
         return sources
+
 
 retriever = Retriever()

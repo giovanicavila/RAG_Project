@@ -5,7 +5,7 @@ from app.models.schemas import (
     IngestRequest, IngestResponse
 )
 from app.core.pipeline import run_rag_pipeline
-from app.core.retrieval.retriever import retriever
+from scripts.ingestion.ingest import ingestion
 
 router = APIRouter()
 # APIRouter acts like a mini-app inside FastAPI.
@@ -42,7 +42,7 @@ async def ingest_text(request: IngestRequest) -> IngestResponse:
         # IDs must be unique across the entire collection.
         # uuid4() generates a random ID that is guaranteed to be unique.
 
-        retriever.add_documents(texts=chunks, metadatas=metadatas, ids=ids)
+        ingestion.add_documents(texts=chunks, metadatas=metadatas, ids=ids)
 
         return IngestResponse(
             message="Text indexed successfully",

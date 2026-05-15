@@ -62,7 +62,7 @@ class Retriever:
                 content=doc,
                 source=meta.get("source", "unknown"),
                 score=round(1 - dist, 4),
-                # ChromaDB returns cosine distance (0 = identical, 2 = opposite).
+                # ChromaDB returns cosine distance (0 = identical, 1 = opposite).
                 # We convert to similarity score: score = 1 - distance
                 # → 1.0 = identical, ~0.0 = irrelevant
             ))

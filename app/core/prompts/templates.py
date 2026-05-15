@@ -13,6 +13,4 @@ def build_context(sources: list) -> str:
     parts = []
     for i, source in enumerate(sources, start=1):
         parts.append(f"[{i}] Source: {source.source}\n{source.content}")
-    return "\n\n---\n\n".join(parts)
-    # The "---" separator makes it clear to the LLM where one chunk ends
-    # and the next begins.
+    return "\n\n---\n\n".join(parts) # The "---" separator makes it clear to the LLM where one chunk ends and the next begins.

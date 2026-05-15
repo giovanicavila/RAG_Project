@@ -26,6 +26,7 @@ async def query(request: QueryRequest) -> QueryResponse:
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest_text(request: IngestRequest) -> IngestResponse:
     """Indexes a raw text string into ChromaDB via the API."""
+    #!TODO: Change chunk method
     try:
         chunk_size, overlap = 500, 50
         chunks, start = [], 0
@@ -54,5 +55,4 @@ async def ingest_text(request: IngestRequest) -> IngestResponse:
 
 @router.get("/health")
 async def health_check():
-    # Simple liveness check. Used by monitoring tools and Docker health checks.
     return {"status": "ok"}

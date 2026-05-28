@@ -1,0 +1,14 @@
+[
+    {
+        "question": "Who created limeDB?",
+        "ground_truth": "The creators are ..."
+    },
+    {
+        "question": "What is LimeDB?",
+        "ground_truth": "LimeDB is a vector database for RAG ..."
+    },
+    {
+        "question": "Who is Marcelo Prates?",
+        "ground_truth": "Marcelo Prates is a developer ..."
+    }
+]

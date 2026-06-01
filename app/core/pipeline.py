@@ -1,29 +1,38 @@
-from app.core.retrieval.retriever import retriever
+from app.core.agent.grader import grader
+from app.core.agent.rewriter import rewriter
+from app.core.agent.tools import retrieval_tool
 from app.core.generation.generator import generator
 from app.models.schemas import QueryResponse
 
-def run_rag_pipeline(question: str, top_k: int | None = None) -> QueryResponse:
-    """
-    Orchestrates the full RAG flow:
-    1. Retrieval  → finds relevant chunks in ChromaDB
-    2. Generation → generates an answer with Gemini
-    3. Returns a QueryResponse with the answer + source documents
-    """
+MAX_RETRIEVAL_ATTEMPTS = 3
 
-    # ── 1. Retrieval ──────────────────────────────────────
-    sources = retriever.search(question, top_k=top_k)
+
+def run_rag_pipeline(question: str, top_k: int | None = None):
+
+    current_query = question
+    sources = []
+
+    for attempt in range(MAX_RETRIEVAL_ATTEMPTS):
+        sources = retrieval_tool.run(current_query, top_k)
+
+        if not sources:
+            current_query = rewriter.rewrite(current_query)
+            continue
+
+        context = "\n".join(doc.content for doc in sources)
+
+        relevant = grader.grade(question, context)
+
+        if relevant:
+            break
+
+        current_query = rewriter.rewrite(current_query)
 
     if not sources:
-        # No context found → skip the LLM call entirely.
-        # Avoids hallucination and wastes no tokens.
         return QueryResponse(
-            answer="I could not find relevant information to answer your question.",
-            sources=[],
-            question=question,
+            answer="No relevant information found.", sources=[], question=question
         )
 
-    # ── 2. Generation ─────────────────────────────────────
     answer = generator.generate(question=question, sources=sources)
 
-    # ── 3. Return result ──────────────────────────────────
     return QueryResponse(answer=answer, sources=sources, question=question)

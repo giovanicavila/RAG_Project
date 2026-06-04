@@ -1,6 +1,6 @@
 # app/core/agent/planner.py
 import json
-from app.core.generation.factory import llm
+from app.core.generation.factory import agent_llm as llm
 
 PLANNER_PROMPT = """You are a routing agent.
 

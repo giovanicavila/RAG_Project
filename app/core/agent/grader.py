@@ -1,6 +1,7 @@
 # app/core/agent/grader.py
 import json
-from app.core.generation.factory import llm
+
+from app.core.generation.factory import agent_llm as llm
 
 
 class ContextGrader:
@@ -28,7 +29,13 @@ or
         response = llm.generate(prompt)
 
         # Strip markdown fences if the model wraps the JSON (e.g. ```json ... ```)
-        cleaned = response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        cleaned = (
+            response.strip()
+            .removeprefix("```json")
+            .removeprefix("```")
+            .removesuffix("```")
+            .strip()
+        )
 
         try:
             result = json.loads(cleaned)

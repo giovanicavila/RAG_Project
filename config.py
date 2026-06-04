@@ -1,28 +1,27 @@
-from typing import Literal
-
-from pydantic import model_validator
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
+from typing import Literal
 
 
 class Settings(BaseSettings):
-    # ── LLM ──────────────────────────────────────────────────────────────────
+    # ── LLM — generation ─────────────────────────────────────────────────────
     llm_provider: Literal["openrouter", "ollama", "openai"] = "openrouter"
-    llm_model: str = "nousresearch/hermes-3-llama-3.1-405b:free"
+    llm_model: str = "moonshotai/kimi-k2"
     llm_api_key: str = ""
     llm_base_url: str = ""
-    # llm_base_url is optional — used to point to custom endpoints.
-    # openrouter: https://openrouter.ai/api/v1
-    # ollama:     http://localhost:11434/v1  (auto-set if provider=ollama)
+
+    # ── LLM — agent (planner, grader, rewriter) ───────────────────────────────
+    agent_llm_provider: Literal["openrouter", "ollama", "openai"] = "openrouter"
+    agent_llm_model: str = "nousresearch/hermes-3-llama-3.1-405b:free"
+    agent_llm_api_key: str = ""
+    # If agent_llm_api_key is empty, falls back to llm_api_key automatically.
+    agent_llm_base_url: str = ""
 
     # ── Embedding ─────────────────────────────────────────────────────────────
-    embedding_provider: Literal["sentence_transformers", "openai", "openrouter"] = (
-        "sentence_transformers"
-    )
+    embedding_provider: Literal["sentence_transformers", "openai", "openrouter"] = "sentence_transformers"
     embedding_model: str = "all-MiniLM-L6-v2"
     embedding_dimension: int = 384
     embedding_api_key: str = ""
-    # sentence_transformers: runs locally, no key needed.
-    # openai / openrouter: api key required.
 
     # ── Vector Store ──────────────────────────────────────────────────────────
     vector_store_provider: Literal["chromadb"] = "chromadb"
@@ -36,22 +35,26 @@ class Settings(BaseSettings):
     temperature: float = 0.0
 
     @model_validator(mode="after")
-    def validate_api_keys(self) -> "Settings":
+    def apply_defaults_and_validate(self) -> "Settings":
+        # If agent key is not set, reuse the main LLM key.
+        if not self.agent_llm_api_key:
+            self.agent_llm_api_key = self.llm_api_key
+
+        # If agent base_url is not set, reuse the main LLM base_url.
+        if not self.agent_llm_base_url:
+            self.agent_llm_base_url = self.llm_base_url
+
         requires_key = {
             "llm": ["openrouter", "openai"],
             "embedding": ["openai", "openrouter"],
         }
         if self.llm_provider in requires_key["llm"] and not self.llm_api_key:
-            raise ValueError(
-                f"LLM_API_KEY is required for provider '{self.llm_provider}'"
-            )
-        if (
-            self.embedding_provider in requires_key["embedding"]
-            and not self.embedding_api_key
-        ):
-            raise ValueError(
-                f"EMBEDDING_API_KEY is required for provider '{self.embedding_provider}'"
-            )
+            raise ValueError(f"LLM_API_KEY is required for provider '{self.llm_provider}'")
+        if self.agent_llm_provider in requires_key["llm"] and not self.agent_llm_api_key:
+            raise ValueError(f"AGENT_LLM_API_KEY is required for provider '{self.agent_llm_provider}'")
+        if self.embedding_provider in requires_key["embedding"] and not self.embedding_api_key:
+            raise ValueError(f"EMBEDDING_API_KEY is required for provider '{self.embedding_provider}'")
+
         return self
 
     class Config:

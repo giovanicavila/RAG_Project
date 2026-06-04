@@ -1,5 +1,5 @@
 # app/core/agent/rewriter.py
-from app.core.generation.factory import llm
+from app.core.generation.factory import agent_llm as llm
 
 
 class QueryRewriter:

@@ -1,27 +1,26 @@
-# Covers any provider that exposes an OpenAI-compatible chat completions API.
-# This includes: OpenAI, OpenRouter, Ollama, LM Studio, vLLM, Groq, etc.
-# The only difference between providers is the base_url and api_key.
+# Covers any provider with an OpenAI-compatible chat completions API:
+# OpenAI, OpenRouter, Ollama, LM Studio, vLLM, Groq, etc.
 
 from openai import OpenAI
 from app.core.generation.base import BaseLLM
 from config import settings
 
-_BASE_URLS = {
-    "openrouter": "https://openrouter.ai/api/v1",
-    "ollama":     "http://localhost:11434/v1",
-    "openai":     None,   # None → uses the default OpenAI endpoint
-}
-
 
 class OpenAICompatibleLLM(BaseLLM):
-    def __init__(self):
-        base_url = settings.llm_base_url or _BASE_URLS.get(settings.llm_provider)
-        api_key  = settings.llm_api_key or "no-key-needed"
-        # "no-key-needed" is a placeholder for local providers (ollama, lm-studio)
-        # that require a non-empty string but ignore the actual value.
-
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
-        self._model  = settings.llm_model
+    def __init__(
+        self,
+        model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ):
+        # Accept explicit params (from factory) or fall back to settings.
+        # This allows the same class to serve both llm and agent_llm
+        # with different configs.
+        self._model = model or settings.llm_model
+        self._client = OpenAI(
+            api_key=api_key or settings.llm_api_key or "no-key-needed",
+            base_url=base_url,
+        )
 
     def generate(self, prompt: str) -> str:
         response = self._client.chat.completions.create(

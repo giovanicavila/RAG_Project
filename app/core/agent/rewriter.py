@@ -1,27 +1,21 @@
-from google.genai import types
-
-from config import client, settings
+# app/core/agent/rewriter.py
+from app.core.generation.factory import llm
 
 
 class QueryRewriter:
     def rewrite(self, question: str) -> str:
-
-        prompt = f"""
-Rewrite the question to improve semantic retrieval.
+        """
+        Rewrites the user question to improve semantic retrieval quality.
+        Returns the rewritten query as a plain string.
+        """
+        prompt = f"""Rewrite the question below to improve semantic retrieval.
+Make it more specific and descriptive.
+Return only the rewritten query — no explanation, no punctuation changes.
 
 Question:
-{question}
+{question}"""
 
-Return only the rewritten query.
-"""
-
-        response = client.models.generate_content(
-            model=settings.model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0),
-        )
-
-        return response.text.strip()
+        return llm.generate(prompt).strip()
 
 
 rewriter = QueryRewriter()

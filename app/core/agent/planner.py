@@ -1,71 +1,47 @@
 # app/core/agent/planner.py
-
 import json
+from app.core.generation.factory import llm
 
-from google.genai import types
-
-from config import client, settings
-
-PLANNER_PROMPT = """
-You are a routing agent.
+PLANNER_PROMPT = """You are a routing agent.
 
 Decide whether the question requires retrieving documents
 from a vector database.
 
-Return ONLY valid JSON.
+Return ONLY valid JSON — no explanation, no markdown, no extra text.
 
 Examples:
 
-Question:
-What is FastAPI?
+Question: What is FastAPI?
+{"action": "retrieve"}
 
-{
-  "action": "retrieve"
-}
+Question: What is 2 + 2?
+{"action": "direct"}
 
-Question:
-What is 2 + 2?
-
-{
-  "action": "direct"
-}
-
-Question:
-Hello
-
-{
-  "action": "direct"
-}
+Question: Hello
+{"action": "direct"}
 """
 
 
 class Planner:
     def decide(self, question: str) -> str:
+        """
+        Returns "retrieve" if the question needs document lookup,
+        or "direct" if the LLM can answer without context.
+        Defaults to "retrieve" on any parsing failure.
+        """
+        prompt = f"{PLANNER_PROMPT}\nQuestion: {question}"
+        response = llm.generate(prompt)
 
-        prompt = f"""
-{PLANNER_PROMPT}
-
-Question:
-{question}
-"""
-
-        response = client.models.generate_content(
-            model=settings.model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0),
-        )
+        cleaned = response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
         try:
-            result = json.loads(response.text)
-
+            result = json.loads(cleaned)
             action = result.get("action", "retrieve")
-
-            if action not in ["retrieve", "direct"]:
+            if action not in ("retrieve", "direct"):
                 return "retrieve"
-
             return action
-
-        except Exception:
+        except (json.JSONDecodeError, KeyError):
+            # Fail safe — default to retrieval when uncertain.
             return "retrieve"
 
 

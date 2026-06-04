@@ -1,15 +1,15 @@
+# app/core/agent/grader.py
 import json
-
-from google.genai import types
-
-from config import client, settings
+from app.core.generation.factory import llm
 
 
 class ContextGrader:
     def grade(self, question: str, context: str) -> bool:
-
-        prompt = f"""
-Question:
+        """
+        Returns True if the context contains enough information
+        to answer the question, False otherwise.
+        """
+        prompt = f"""Question:
 {question}
 
 Context:
@@ -17,7 +17,7 @@ Context:
 
 Can this context answer the question?
 
-Return JSON only:
+Return JSON only — no explanation, no markdown, no extra text:
 
 {{"relevant": true}}
 
@@ -25,17 +25,16 @@ or
 
 {{"relevant": false}}
 """
+        response = llm.generate(prompt)
 
-        response = client.models.generate_content(
-            model=settings.model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0),
-        )
+        # Strip markdown fences if the model wraps the JSON (e.g. ```json ... ```)
+        cleaned = response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
         try:
-            result = json.loads(response.text)
-            return result["relevant"]
-        except:
+            result = json.loads(cleaned)
+            return bool(result.get("relevant", False))
+        except (json.JSONDecodeError, KeyError):
+            # Fail safe — treat unparseable response as not relevant.
             return False
 
 

@@ -1,6 +1,6 @@
 import chromadb
 
-from app.core.embeddings.embedder import embedder
+from app.core.embeddings.factory import embedder
 from app.models.schemas import SourceDocument
 from config import settings
 
@@ -8,12 +8,13 @@ from config import settings
 class Retriever:
     def __init__(self):
         self.client = chromadb.PersistentClient(
-            path=settings.chroma_persist_dir,
+            path=settings.vector_store_persist_directory,
             # Persists vectors to disk at ./chroma_db.
             # Use chromadb.Client() for in-memory storage (tests only).
         )
         self.collection = self.client.get_or_create_collection(
-            name=settings.collection_name, metadata={"hnsw:space": "cosine"}
+            name=settings.vector_store_collection_name,
+            metadata={"hnsw:space": settings.vector_store_similarity_metric},
         )
 
     def search(self, query: str, top_k: int | None = None) -> list[SourceDocument]:

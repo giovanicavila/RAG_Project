@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     agent_llm_provider: Literal["openrouter", "ollama", "openai"] = "openrouter"
     agent_llm_model: str = "nousresearch/hermes-3-llama-3.1-405b:free"
     agent_llm_api_key: str = ""
-    # If agent_llm_api_key is empty, falls back to llm_api_key automatically.
     agent_llm_base_url: str = ""
 
     # ── Embedding ─────────────────────────────────────────────────────────────
@@ -28,6 +27,10 @@ class Settings(BaseSettings):
     vector_store_persist_directory: str = "./chroma_db"
     vector_store_collection_name: str = "documents"
     vector_store_similarity_metric: Literal["cosine", "l2", "ip"] = "cosine"
+
+    # ── Search / RRF ──────────────────────────────────────────────────────────
+    search_mode: Literal["hybrid", "vector", "lexical"] = "hybrid"
+    rrf_k: int = 60
 
     # ── RAG ───────────────────────────────────────────────────────────────────
     top_k: int = 4

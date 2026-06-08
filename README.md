@@ -12,16 +12,18 @@
 5. [Layer-by-Layer Breakdown](#5-layer-by-layer-breakdown)
 6. [Data Flow](#6-data-flow)
 7. [The Provider Pattern](#7-the-provider-pattern)
-8. [Agentic RAG Pipeline](#8-agentic-rag-pipeline)
-9. [Configuration System](#9-configuration-system)
-10. [Key Design Decisions](#10-key-design-decisions)
-11. [Extension Guide](#11-extension-guide)
+8. [Hybrid Search & RRF](#8-hybrid-search--rrf)
+9. [Retrieval Observability](#9-retrieval-observability)
+10. [Agentic RAG Pipeline](#10-agentic-rag-pipeline)
+11. [Configuration System](#11-configuration-system)
+12. [Key Design Decisions](#12-key-design-decisions)
+13. [Extension Guide](#13-extension-guide)
 
 ---
 
 ## 1. Overview & Philosophy
 
-This is a **Retrieval-Augmented Generation (RAG) API** built with FastAPI. It answers user questions by retrieving relevant document chunks from a local ChromaDB vector store and generating grounded responses via an LLM.
+This is a **Retrieval-Augmented Generation (RAG) API** built with FastAPI. It answers user questions by retrieving relevant document chunks using **hybrid search** (BM25 lexical + vector similarity fused via Reciprocal Rank Fusion) and generating grounded responses via an LLM.
 
 ### Core Philosophy
 
@@ -29,21 +31,25 @@ This is a **Retrieval-Augmented Generation (RAG) API** built with FastAPI. It an
 - **Provider Pattern:** Swapping from OpenRouter to Ollama or from local embeddings to OpenAI should require zero code changes — only environment variable updates.
 - **Zero business logic in HTTP layer:** `routes.py` only validates and delegates. All intelligence lives in `core/`.
 - **Agentic self-correction:** The system doesn't just retrieve once. It *plans*, *retrieves*, *grades*, and *rewrites* until it finds relevant context.
+- **Hybrid search first:** Combining lexical (BM25) and semantic (vector) search through RRF produces more robust retrieval than either method alone.
+- **Observability built-in:** A dedicated explain endpoint lets developers inspect every stage of the retrieval pipeline without invoking the LLM.
 - **Configuration via environment:** No hardcoded API keys, model names, or URLs anywhere.
 
 ---
 
 ## 2. Technology Stack
 
-| Component       | Technology                             |
-|-----------------|----------------------------------------|
-| Web Framework   | FastAPI + Pydantic v2                  |
-| Vector Store    | ChromaDB (local, persistent)           |
+| Component       | Technology                                      |
+|-----------------|-------------------------------------------------|
+| Web Framework   | FastAPI + Pydantic v2                           |
+| Vector Store    | ChromaDB (local, persistent)                    |
+| Lexical Search  | BM25Okapi via `rank-bm25` (pure Python)         |
+| Hybrid Fusion   | Reciprocal Rank Fusion (RRF, custom impl)       |
 | Embeddings      | sentence-transformers (default) or OpenAI-compatible APIs |
 | LLM Generation  | OpenAI-compatible APIs (OpenRouter, Ollama, OpenAI) |
-| Chunking        | Chonkie (SemanticChunker)              |
-| Evaluation      | RAGAS                                  |
-| Orchestration   | Custom agent loop (not LangChain)      |
+| Chunking        | Chonkie (SemanticChunker)                       |
+| Evaluation      | RAGAS                                           |
+| Orchestration   | Custom agent loop (not LangChain)               |
 
 ---
 
@@ -53,7 +59,7 @@ This is a **Retrieval-Augmented Generation (RAG) API** built with FastAPI. It an
 RAG_PROJECT/
 ├── app/
 │   ├── api/
-│   │   └── routes.py                      ← HTTP layer (validates, delegates)
+│   │   └── routes.py                      ← Endpoints: /query, /ingest, /retrieval/explain, /health
 │   ├── core/
 │   │   ├── agent/
 │   │   │   ├── state.py                   ← AgentState dataclass
@@ -75,10 +81,10 @@ RAG_PROJECT/
 │   │   ├── prompts/
 │   │   │   └── templates.py               ← RAG_SYSTEM_PROMPT + build_context()
 │   │   ├── retrieval/
-│   │   │   └── retriever.py               ← ChromaDB wrapper → singleton
+│   │   │   └── retriever.py               ← VectorRetriever + BM25Retriever + HybridRetriever (RRF)
 │   │   └── pipeline.py                    ← Orchestrates the full RAG + agent flow
 │   └── models/
-│       └── schemas.py                     ← Pydantic request/response models
+│       └── schemas.py                     ← All Pydantic request/response models
 ├── evaluation/                             ← RAG quality metrics (RAGAS)
 │   ├── cli.py
 │   ├── runner.py
@@ -94,12 +100,16 @@ RAG_PROJECT/
 │   └── data/
 │       └── questions.json
 ├── scripts/
-│   └── ingestion/
-│       └── ingest.py                      ← Indexes documents into ChromaDB
+│   ├── ingestion/
+│   │   └── ingest.py                      ← Indexes into ChromaDB + BM25 corpus
+│   └── chromadb/
+│       ├── test_chromadb.py               ← Smoke test for ChromaDB
+│       └── view_chunks.py                 ← Utility to inspect stored chunks
 ├── config.py                              ← Pydantic Settings + .env
 ├── main.py                                ← FastAPI app entrypoint
 ├── requirements.txt
-└── ARCHITECTURE.md                        ← This file
+├── DOCUMENTATION.md                       ← Complete reference documentation
+└── README.md                              ← This file
 ```
 
 ---
@@ -120,7 +130,7 @@ BaseEmbedder.embed_text(text) ──► SentenceTransformersEmbedder
 
 ### 4.2 Singleton for Heavy Clients
 
-Expensive objects (embedding model, LLM client, ChromaDB collection) are instantiated **once** at import time and reused everywhere via module-level variables:
+Expensive objects (embedding model, LLM client, ChromaDB collection, BM25 index) are instantiated **once** at import time and reused everywhere via module-level variables:
 
 ```python
 # Import these, never instantiate directly
@@ -176,7 +186,9 @@ async def ingest_text(request: IngestRequest) -> IngestResponse:
     # 5. return summary
 ```
 
-**Consciously Simple:** The endpoint uses `semantic chunking`, tracks token counts in metadata, and assigns unique IDs with `uuid4()`. No orchestration decisions here.
+The endpoint also includes **`POST /retrieval/explain`** which runs the same retrieval pipeline (BM25 + Vector + RRF) but returns detailed per-stage results **without calling the LLM** — designed for debugging and observability.
+
+**Consciously Simple:** The endpoint uses semantic chunking, tracks token counts in metadata, and assigns unique IDs with `uuid4()`. No orchestration decisions here.
 
 ### 5.2 Core Layer — `app/core/`
 
@@ -224,11 +236,32 @@ Each agent uses `agent_llm` — possibly a different (often cheaper/faster) mode
 
 #### 5.2.5 Retrieval (`retrieval/retriever.py`)
 
-Wraps ChromaDB. Given a query string:
-1. Embeds via `embedder.embed_text(query)`
+Three classes forming a hybrid search stack:
+
+| Class | Role |
+|-------|------|
+| `VectorRetriever` | Semantic search via ChromaDB (embedding similarity) |
+| `BM25Retriever` | Lexical search via BM25Okapi (keyword matching) |
+| `HybridRetriever` | Orchestrates both + applies RRF; also exposes `explain()` |
+
+**VectorRetriever:**
+1. Embeds the query via `embedder.embed_text(query)`
 2. Runs `collection.query(...)` with cosine distance
-3. Converts distances to similarity scores (`score = 1 - distance`)
+3. Converts distance to similarity: `score = 1 - distance`
 4. Returns `list[SourceDocument]`
+
+**BM25Retriever:**
+- Stores document corpus in memory; builds `BM25Okapi` index lazily
+- Tokenizes by lowercasing + splitting; returns raw BM25 scores
+- Skips zero-score documents; marks index as `_dirty` when new docs are added
+- On startup, syncs all documents from ChromaDB for persistence
+
+**HybridRetriever:**
+- Queries both retrievers at `2x top_k`, then fuses via **Reciprocal Rank Fusion**:
+  ```
+  RRF_score(d) = 1/(k + rank_vec(d)) + 1/(k + rank_bm25(d))
+  ```
+- Respects `search_mode` config: `"hybrid"` (default), `"vector"`, or `"lexical"`
 
 #### 5.2.6 Chunking (`chunker/chunker.py`)
 
@@ -242,13 +275,15 @@ Contains the system prompt with explicit instructions on when to use retrieved c
 
 Pure Pydantic models shared across the app. No business logic here.
 
-| Class             | Role                                            |
-|-------------------|-------------------------------------------------|
-| `QueryRequest`    | Validates `question` (3–1000 chars) + optional `top_k` (1–20) |
-| `QueryResponse`   | Returns `answer`, `sources[]`, and `question` (for debugging) |
-| `SourceDocument`  | One retrieved chunk with `id`, `content`, `source`, `score` |
-| `IngestRequest`   | Validates `text` (≥10 chars) + `source_name` |
-| `IngestResponse`  | Returns `message`, `chunks_created`, `source` |
+| Class | Role |
+|-------|------|
+| `QueryRequest` | Validates `question` (3–1000 chars) + optional `top_k` (1–20) |
+| `QueryResponse` | Returns `answer`, `sources[]`, and `question` (for debugging) |
+| `SourceDocument` | One retrieved chunk with `id`, `content`, `source`, `score` |
+| `IngestRequest` | Validates `text` (≥10 chars) + `source_name` |
+| `IngestResponse` | Returns `message`, `chunks_created`, `source` |
+| `RetrievalExplainRequest` | Validates `query` + optional `top_k` (1–50) |
+| `RetrievalExplainResponse` | Returns all retrieval stages: `bm25_results`, `vector_results`, `hybrid_results`, `reranked_results` |
 
 ### 5.4 Evaluation — `evaluation/`
 
@@ -269,6 +304,8 @@ A standalone module for quality assessment using **RAGAS**.
 ### 5.5 Ingestion — `scripts/ingestion/ingest.py`
 
 A standalone script to index documents. Can be run independently or triggered via the `/ingest` API endpoint.
+
+**Dual indexing:** After upserting embeddings into ChromaDB, it also calls `retriever.add_documents()` to keep the BM25 corpus in sync — ensuring both search methods stay consistent.
 
 ---
 
@@ -305,8 +342,9 @@ Client Request
 │  │ Loop: up to 3 attempts                      │   │
 │  │                                             │   │
 │  │  ┌──────────────┐  ┌─────────┐  ┌─────────┐ │   │
-│  │  │ retrieve     │─▶│ grade   │ │ rewrite │ │   │
-│  │  │ (ChromaDB)   │  │ relevant?│ │ query   │ │   │
+ │  │  │ HybridRetriever│─▶│ grade   │ │ rewrite │ │   │
+ │  │  │ BM25+Vector   │  │ relevant?│ │ query   │ │   │
+ │  │  │    + RRF      │  └────┬────┘  └──┬──────┘ │   │
 │  │  └──────────────┘  └────┬────┘  └──┬──────┘ │   │
 │  │                         │ yes      │ no     │   │
 │  │                         ▼          └───────▶│   │
@@ -351,6 +389,10 @@ embedder.embed_batch(chunks)
 ChromaDB.collection.upsert(ids, embeddings, documents, metadatas)
       │
       ▼
+retriever.add_documents(texts, metadatas, ids)
+  → BM25 corpus updated, index marked dirty (lazy rebuild)
+      │
+      ▼
 IngestResponse(message, chunks_created, source)
 ```
 
@@ -387,9 +429,81 @@ App Code ──► BaseLLM.generate()
 
 ---
 
-## 8. Agentic RAG Pipeline
+## 8. Hybrid Search & RRF
 
-### 8.1 Loop Detail
+### 8.1 Motivation
+
+Vector search excels at semantic matching (e.g., "password recovery" matches "reset password") but misses exact keyword matches. BM25 excels at keyword precision but ignores meaning. Hybrid search combines both.
+
+### 8.2 BM25 (Lexical Search)
+
+BM25Okapi scores documents based on term frequency, inverse document frequency, and length normalization:
+
+```
+score(D, Q) = Σ (IDF(q) · TF(q, D) · (k₁ + 1) / (TF(q, D) + k₁ · (1 - b + b · |D| / avgdl)))
+```
+
+**BM25Retriever** maintains a document corpus in memory, builds the BM25 index lazily (`_dirty` flag), and syncs from ChromaDB on startup. Only documents with score > 0 are returned.
+
+### 8.3 Reciprocal Rank Fusion (RRF)
+
+RRF combines rankings without score normalization:
+
+```
+RRF_score(d) = 1 / (k + rank_vec(d)) + 1 / (k + rank_bm25(d))
+```
+
+Where `k = 60` (configurable via `rrf_k`). Rankings are more comparable across heterogeneous systems than raw scores — BM25 scores and cosine similarity operate on completely different scales.
+
+### 8.4 Search Modes
+
+Set `SEARCH_MODE` in `.env`:
+
+| Mode | Behavior |
+|------|----------|
+| `hybrid` (default) | BM25 + Vector + RRF fusion |
+| `vector` | Vector search only (disables BM25) |
+| `lexical` | BM25 only (disables vector search) |
+
+---
+
+## 9. Retrieval Observability
+
+### 9.1 Purpose
+
+The `/retrieval/explain` endpoint lets developers debug the retrieval pipeline **without invoking the LLM**:
+
+```
+POST /api/v1/retrieval/explain
+{
+  "query": "How can I enable 2FA?",
+  "top_k": 5
+}
+```
+
+### 9.2 Response
+
+Returns 4 stages, each showing the exact data the production pipeline uses:
+
+| Stage | Content |
+|-------|---------|
+| `bm25_results` | Raw BM25 scores (unnormalized), only docs with score > 0 |
+| `vector_results` | Cosine similarity scores (0 to 1) |
+| `hybrid_results` | RRF-fused ranking showing per-doc contributions (null if missing from one system) |
+| `reranked_results` | Placeholder for future cross-encoder reranker |
+
+### 9.3 Deterministic Debugging
+
+- No LLM calls — eliminates nondeterminism
+- Raw BM25 scores preserved (not normalized)
+- 200-character text_preview per document
+- Per-stage isolation shows how each rank changes through the pipeline
+
+---
+
+## 10. Agentic RAG Pipeline
+
+### 10.1 Loop Detail
 
 The pipeline (`pipeline.py`) runs an adaptive agent loop with up to 3 retrieval attempts:
 
@@ -397,7 +511,7 @@ The pipeline (`pipeline.py`) runs an adaptive agent loop with up to 3 retrieval 
 1. Planner decides: "retrieve" or "direct"
 2. If "direct" → LLM generates from parametric memory, done
 3. For attempt in 1..3:
-   a. Retrieve top_k chunks from ChromaDB via retrieval_tool
+   a. Retrieve top_k chunks via HybridRetriever (BM25 + Vector + RRF)
    b. If no chunks found → rewrite query, retry
    c. Grader evaluates context relevance
    d. If relevant → break loop
@@ -406,7 +520,7 @@ The pipeline (`pipeline.py`) runs an adaptive agent loop with up to 3 retrieval 
 5. Build RAG prompt with context → LLM generates grounded answer
 ```
 
-### 8.2 Agent State
+### 10.2 Agent State
 
 The `AgentState` dataclass tracks state across turns:
 
@@ -418,7 +532,7 @@ The `AgentState` dataclass tracks state across turns:
 | `attempts` | Retry counter |
 | `action` | Planner decision: `"retrieve"` or `"direct"` |
 
-### 8.3 Agent Prompts and Outputs
+### 10.3 Agent Prompts and Outputs
 
 | Agent | Model | Prompt Style | Output |
 |-------|-------|-------------|--------|
@@ -426,17 +540,17 @@ The `AgentState` dataclass tracks state across turns:
 | **Grader** | `agent_llm` | JSON instruction | `{"relevant": true \| false}` |
 | **Rewriter** | `agent_llm` | Free-text instruction | Rewritten query string |
 
-### 8.4 Why Agentic?
+### 10.4 Why Agentic?
 
 - **Single-shot RAG** fails when retrieved chunks are irrelevant. The grader catches this.
-- **Query rewriting** reformulates vague questions (e.g., "how fast?" → "what is the top speed of the X-200 engine?"), improving retrieval recall.
+- **Query rewriting** reformulates vague questions, improving retrieval recall.
 - **Fail-safe:** after 3 failed attempts, the system returns a parametric answer rather than an empty response.
 
 ---
 
-## 9. Configuration System
+## 11. Configuration System
 
-### 9.1 `config.py`
+### 11.1 `config.py`
 
 Uses **Pydantic Settings v2** for type-safe, validated configuration loaded from `.env`.
 
@@ -446,15 +560,16 @@ Uses **Pydantic Settings v2** for type-safe, validated configuration loaded from
 | LLM (agent) | `agent_llm_provider`, `agent_llm_model`, `agent_llm_api_key`, `agent_llm_base_url` |
 | Embedding | `embedding_provider`, `embedding_model`, `embedding_dimension`, `embedding_api_key` |
 | Vector Store | `vector_store_provider`, `vector_store_persist_directory`, `vector_store_collection_name`, `vector_store_similarity_metric` |
+| Search / RRF | `search_mode` (hybrid/vector/lexical), `rrf_k` (default 60) |
 | RAG | `top_k`, `max_tokens`, `temperature` |
 
-### 9.2 Auto-fallback Logic
+### 11.2 Auto-fallback Logic
 
 - If `agent_llm_api_key` is empty → falls back to `llm_api_key`
 - If `agent_llm_base_url` is empty → falls back to `llm_base_url`
 - Ensures agent LLM can share the same credentials as the main LLM without redundant config
 
-### 9.3 Validation
+### 11.3 Validation
 
 Raises `ValueError` at startup for:
 - Missing `LLM_API_KEY` when provider is `openrouter` or `openai`
@@ -462,17 +577,35 @@ Raises `ValueError` at startup for:
 - Missing `EMBEDDING_API_KEY` when embedding provider is `openai` or `openrouter`
 - Unsupported provider strings
 
-### 9.4 `.env` File
+### 11.4 `.env` File
 
-All config is loaded from `.env` at process startup. See `.env.example` for all available options.
+```bash
+LLM_PROVIDER=openrouter
+LLM_MODEL=moonshotai/kimi-k2
+LLM_API_KEY=sk-or-v1-...
+
+AGENT_LLM_PROVIDER=openrouter
+AGENT_LLM_MODEL=nousresearch/hermes-3-llama-3.1-405b:free
+
+EMBEDDING_PROVIDER=sentence_transformers
+EMBEDDING_MODEL=all-MiniLM-L6-v2
+
+SEARCH_MODE=hybrid      # hybrid | vector | lexical
+RRF_K=60
+
+TOP_K=4
+```
 
 ---
 
-## 10. Key Design Decisions
+## 12. Key Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
 | **No LangChain** | LangChain adds abstraction overhead and debugging complexity. Custom agent loop is ~300 lines vs 1000+ with LCEL. |
+| **Hybrid search (BM25 + Vector + RRF)** | Vector search misses exact keywords; BM25 misses semantics. RRF combines both without score normalization. |
+| **BM25 synced from ChromaDB** | ChromaDB is the single source of truth. BM25 index is rebuilt from ChromaDB on startup. |
+| **RRF over weighted sum** | Rankings are more comparable than scores across heterogeneous systems. No parameter tuning beyond k. |
 | **Semantic chunking** | Fixed-token chunking splits sentences mid-thought. Semantic chunking (Chonkie) respects sentence/paragraph boundaries using embedding similarity shifts. |
 | **Cosine similarity** | ChromaDB default. Embeddings are L2-normalized, converting cosine distance (0..2) to similarity score (`1 - distance`). |
 | **Separate agent LLM** | Planner/grader/rewriter calls are frequent but simple. A cheaper model reduces cost without sacrificing quality. |
@@ -480,12 +613,14 @@ All config is loaded from `.env` at process startup. See `.env.example` for all 
 | **Pydantic v2** | Input validation, serialization, and OpenAPI docs from a single schema definition. |
 | **Synchronous core** | ChromaDB and sentence-transformers are synchronous. Wrapping in async adds complexity without benefit for a local-first API. |
 | **Fallback on failure** | If retrieval yields nothing after 3 attempts, the system falls back to parametric knowledge rather than returning empty-handed. |
+| **Explain endpoint** | Observability is a first-class feature. Debug retrieval without LLM calls. |
+| **Raw BM25 scores in explain** | Normalized scores lose information. Explain returns raw BM25 for accurate debugging. |
 
 ---
 
-## 11. Extension Guide
+## 13. Extension Guide
 
-### 11.1 Adding a New LLM Provider
+### 13.1 Adding a New LLM Provider
 
 1. Create `app/core/generation/anthropic_llm.py` implementing `BaseLLM`
 2. Add the provider to the `llm_provider` / `agent_llm_provider` Literal in `config.py`
@@ -493,29 +628,38 @@ All config is loaded from `.env` at process startup. See `.env.example` for all 
 4. Add API key validation in `config.py`'s `@model_validator`
 5. Set `LLM_PROVIDER=anthropic` in `.env` — no other code changes needed
 
-### 11.2 Adding a New Embedding Provider
+### 13.2 Adding a New Embedding Provider
 
 1. Create `app/core/embeddings/cohere_embedder.py` implementing `BaseEmbedder`
 2. Add provider to `embedding_provider` Literal in `config.py`
 3. Add branch in `embeddings/factory.py`
 4. Set `EMBEDDING_PROVIDER=cohere` in `.env`
 
-### 11.3 Adding a New Agent
+### 13.3 Adding a New Agent
 
 1. Create `app/core/agent/your_agent.py`
 2. Import `agent_llm` from `app.core.generation.factory`
 3. Wire it into `pipeline.py`'s loop
 4. Optionally add fields to `AgentState`
 
-### 11.4 Adding a New API Route
+### 13.4 Adding a Reranker
+
+The `reranked_results` field in the explain endpoint is ready for a cross-encoder reranker:
+
+1. Create `app/core/retrieval/reranker.py`
+2. Add a `reranker_provider` setting to `config.py`
+3. In `HybridRetriever.explain()`: pass hybrid results through the reranker
+4. Populate the `reranked_results` list with reranker scores and previous hybrid ranks
+
+### 13.5 Adding a New API Route
 
 1. Define request/response models in `app/models/schemas.py`
 2. Add route handler in `app/api/routes.py`
 3. Delegate to a core function — keep the route thin
 
-### 11.5 Adding a New Vector Store
+### 13.6 Adding a New Vector Store
 
 1. Create a new retriever (e.g., `app/core/retrieval/pinecone_retriever.py`)
 2. Implement `search()` returning `list[SourceDocument]`
 3. Update `vector_store_provider` Literal in `config.py`
-4. Swap the retriever singleton used by the rest of the app
+4. Integrate into `HybridRetriever`

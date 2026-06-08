@@ -4,11 +4,14 @@ from app.core.chunker.chunker import chunker
 from fastapi import APIRouter, HTTPException
 
 from app.core.pipeline import run_rag_pipeline
+from app.core.retrieval.retriever import retriever
 from app.models.schemas import (
     IngestRequest,
     IngestResponse,
     QueryRequest,
     QueryResponse,
+    RetrievalExplainRequest,
+    RetrievalExplainResponse,
 )
 from scripts.ingestion.ingest import ingestion
 
@@ -63,3 +66,11 @@ async def ingest_text(request: IngestRequest) -> IngestResponse:
 @router.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@router.post("/retrieval/explain", response_model=RetrievalExplainResponse)
+async def retrieval_explain(request: RetrievalExplainRequest) -> RetrievalExplainResponse:
+    try:
+        return retriever.explain(request.query, request.top_k)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

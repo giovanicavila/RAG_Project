@@ -52,3 +52,56 @@ class IngestResponse(BaseModel):
     message: str
     chunks_created: int  # how much chunks was indexed
     source: str
+
+
+# ── Retrieval Observability ──────────────────────────────────────────────
+
+class RetrievalExplainRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+    top_k: Optional[int] = Field(
+        default=None, ge=1, le=50,
+        description="How many documents to retrieve per stage",
+    )
+
+
+class BM25ResultItem(BaseModel):
+    rank: int
+    score: float
+    document_id: str
+    source_name: str
+    text_preview: str
+
+
+class VectorResultItem(BaseModel):
+    rank: int
+    score: float
+    document_id: str
+    source_name: str
+    text_preview: str
+
+
+class HybridResultItem(BaseModel):
+    rank: int
+    rrf_score: float
+    document_id: str
+    source_name: str
+    bm25_rank: Optional[int] = None
+    bm25_score: Optional[float] = None
+    vector_rank: Optional[int] = None
+    vector_score: Optional[float] = None
+
+
+class RerankedResultItem(BaseModel):
+    rank: int
+    reranker_score: float
+    document_id: str
+    source_name: str
+    previous_hybrid_rank: int
+
+
+class RetrievalExplainResponse(BaseModel):
+    query: str
+    bm25_results: list[BM25ResultItem]
+    vector_results: list[VectorResultItem]
+    hybrid_results: list[HybridResultItem]
+    reranked_results: list[RerankedResultItem]

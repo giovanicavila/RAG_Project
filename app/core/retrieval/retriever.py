@@ -105,23 +105,59 @@ class BM25Retriever:
         k = top_k or len(self._documents)
         top_indices = sorted(
             range(len(scores)), key=lambda i: scores[i], reverse=True
-        )[:k]
+        )
 
-        max_score = max(scores)
+        max_score = float(max(scores))
         if max_score <= 0:
             return []
 
         results = []
         for idx in top_indices:
+            raw_score = float(scores[idx])
+            if raw_score <= 0:
+                break
             doc = self._documents[idx]
             results.append(
                 SourceDocument(
                     id=doc["id"],
                     content=doc["text"],
                     source=doc["metadata"].get("source", "unknown"),
-                    score=round(scores[idx] / max_score, 4),
+                    score=round(raw_score / max_score, 4),
                 )
             )
+            if len(results) >= k:
+                break
+        return results
+
+    def search_raw(self, query: str, top_k: int | None = None) -> list[dict]:
+        if not self._documents:
+            return []
+
+        if self._dirty or self._bm25 is None:
+            self._build_index()
+
+        tokenized_query = self._tokenize(query)
+        scores = self._bm25.get_scores(tokenized_query)
+
+        k = top_k or len(self._documents)
+        top_indices = sorted(
+            range(len(scores)), key=lambda i: scores[i], reverse=True
+        )
+
+        results = []
+        for idx in top_indices:
+            raw_score = float(scores[idx])
+            if raw_score <= 0:
+                break
+            doc = self._documents[idx]
+            results.append({
+                "id": doc["id"],
+                "text": doc["text"],
+                "source": doc["metadata"].get("source", "unknown"),
+                "score": round(raw_score, 4),
+            })
+            if len(results) >= k:
+                break
         return results
 
 
@@ -182,6 +218,80 @@ class HybridRetriever:
             doc.score = round(rrf_scores[doc_id], 4)
             result.append(doc)
         return result
+
+
+    def explain(self, query: str, top_k: int | None = None) -> dict:
+        k = top_k or settings.top_k
+
+        bm25_raw = self.bm25.search_raw(query, top_k=k)
+        vector_raw = self.vector.search(query, top_k=k)
+
+        bm25_results = []
+        bm25_map = {}
+        for rank, item in enumerate(bm25_raw, 1):
+            bm25_results.append({
+                "rank": rank,
+                "score": item["score"],
+                "document_id": item["id"],
+                "source_name": item["source"],
+                "text_preview": item["text"][:200],
+            })
+            bm25_map[item["id"]] = {"rank": rank, "score": item["score"]}
+
+        vector_results = []
+        vector_map = {}
+        for rank, doc in enumerate(vector_raw, 1):
+            vector_results.append({
+                "rank": rank,
+                "score": doc.score,
+                "document_id": doc.id,
+                "source_name": doc.source,
+                "text_preview": doc.content[:200],
+            })
+            vector_map[doc.id] = {"rank": rank, "score": doc.score}
+
+        all_ids = set(bm25_map.keys()) | set(vector_map.keys())
+        rrf_scores = {}
+        source_map = {}
+        for item in bm25_raw:
+            source_map[item["id"]] = item["source"]
+        for doc in vector_raw:
+            source_map[doc.id] = doc.source
+
+        for doc_id in all_ids:
+            s = 0.0
+            if doc_id in bm25_map:
+                s += 1.0 / (RRF_K + bm25_map[doc_id]["rank"])
+            if doc_id in vector_map:
+                s += 1.0 / (RRF_K + vector_map[doc_id]["rank"])
+            rrf_scores[doc_id] = s
+
+        ranked_ids = sorted(all_ids, key=lambda i: rrf_scores[i], reverse=True)[:k]
+
+        hybrid_results = []
+        for rank, doc_id in enumerate(ranked_ids, 1):
+            b = bm25_map.get(doc_id)
+            v = vector_map.get(doc_id)
+            hybrid_results.append({
+                "rank": rank,
+                "rrf_score": round(rrf_scores[doc_id], 5),
+                "document_id": doc_id,
+                "source_name": source_map.get(doc_id, "unknown"),
+                "bm25_rank": b["rank"] if b else None,
+                "bm25_score": b["score"] if b else None,
+                "vector_rank": v["rank"] if v else None,
+                "vector_score": v["score"] if v else None,
+            })
+
+        reranked_results = []
+
+        return {
+            "query": query,
+            "bm25_results": bm25_results,
+            "vector_results": vector_results,
+            "hybrid_results": hybrid_results,
+            "reranked_results": reranked_results,
+        }
 
 
 retriever = HybridRetriever()
